@@ -1,0 +1,155 @@
+import numpy as np
+
+class HMM():
+    def __init__(self, Observations, Transition, Emission, Initial_distribution):
+        self.Observations = Observations
+        self.Transition = Transition
+        self.Emission = Emission
+        self.Initial_distribution = Initial_distribution
+
+    def forward(self):
+        alphas = []
+        alpha_0 = self.Initial_distribution * self.Emission[:, self.Observations[0]]
+        alphas.append(alpha_0)
+        prev_alpha = alpha_0
+
+        for i in range(1, 20):
+            alpha = self.Emission[:, self.Observations[i]] * np.matmul(prev_alpha, self.Transition)
+            prev_alpha = alpha
+            alphas.append(alpha)
+
+        return np.array(alphas)
+
+    def backward(self):
+        beta_20 = np.array([1, 1])  # Ensure it's a NumPy array
+        prev_beta = beta_20
+        final_betas = [beta_20]
+
+        for i in range(19, 0, -1):
+            beta_ = self.Emission[:, self.Observations[i]] * prev_beta
+            prev_beta = np.matmul(self.Transition, beta_)
+            final_betas.append(prev_beta)
+
+        return np.array(final_betas[::-1])  # Reverse for correct order
+
+    def gamma_comp(self, alphas, beta):
+        gamma = np.zeros((20, 2))
+        for i in range(20):
+            gamma[i, :] = alphas[i, :] * beta[i, :]
+            gamma[i, :] /= np.sum(gamma[i, :])  # Normalize per time step
+        return gamma
+
+    def xi_comp(self, alpha, beta, gamma):
+        T = self.Transition  
+        M = self.Emission  
+        obs_list = self.Observations  
+        num_states = T.shape[0]  
+        num_time_steps = alpha.shape[0] - 1  
+
+        xi = np.zeros((num_time_steps, num_states, num_states))
+
+        for k in range(num_time_steps):
+            denom = 0  
+            for x in range(num_states):
+                for x_next in range(num_states):
+                    xi[k, x, x_next] = (alpha[k, x] * T[x, x_next] * M[x_next, obs_list[k + 1]] * beta[k + 1, x_next])
+                    denom += xi[k, x, x_next]  
+
+            if denom > 0:
+                xi[k] /= denom  
+
+        return xi
+
+    def update(self, alpha, beta, gamma, xi):
+        num_states = self.Transition.shape[0]
+        num_observations = self.Emission.shape[1]
+        T_prime = np.zeros_like(self.Transition)
+        M_prime = np.zeros_like(self.Emission)
+
+        # Update initial state distribution
+        new_init_state = gamma[0]
+
+        # Update transition matrix
+        for x in range(num_states):
+            denom = np.sum(gamma[:-1, x])
+            if denom > 0:
+                for x_next in range(num_states):
+                    T_prime[x, x_next] = np.sum(xi[:, x, x_next]) / denom 
+
+        # Update emission matrix
+        for x in range(num_states):
+            denom = np.sum(gamma[:, x])
+            if denom > 0:
+                for y in range(num_observations):
+                    M_prime[x, y] = np.sum(gamma[:, x] * (self.Observations == y)) / denom
+
+        return T_prime, M_prime, new_init_state
+
+    def trajectory_probability(self, alpha, beta, T_prime, M_prime, new_init_state):
+        P_original = np.sum(alpha[-1])  # P(Y1, ..., Yt | λ) using forward algorithm
+        updated_hmm = HMM(self.Observations, T_prime, M_prime, new_init_state)
+        alpha_prime = updated_hmm.forward()
+        P_prime = np.sum(alpha_prime[-1])  # P(Y1, ..., Yt | λ′)
+        return P_original, P_prime
+
+
+if __name__ == '__main__':
+    obs_matrix = np.array([[0.4, 0.1, 0.5], [0.1, 0.5, 0.4]])
+    trans_matrix = np.array([[0.5, 0.5], [0.5, 0.5]])
+    obs_list = np.array([2, 0, 0, 2, 1, 2, 1, 1, 1, 2, 1, 1, 1, 1, 1, 2, 2, 0, 0, 1])
+    init_dist = np.array([0.5, 0.5])
+
+    hmm = HMM(obs_list, trans_matrix, obs_matrix, init_dist)
+
+    alphas = hmm.forward()
+    print("\n### Forward Probabilities (α) ###\n")
+    print("Time Step | State 1    | State 2")
+    print("----------------------------------")
+    for i, alpha in enumerate(alphas):
+        print(f"{i:9} | {alpha[0]:.11f} | {alpha[1]:.11f}")
+
+    betas = hmm.backward()
+    print("\n### Backward Probabilities (β) ###\n")
+    print("Time Step | State 1    | State 2")
+    print("----------------------------------")
+    for i, beta in enumerate(betas):
+        print(f"{i:9} | {beta[0]:.11f} | {beta[1]:.11f}")
+
+    gamma = hmm.gamma_comp(alphas, betas)
+    print("\n### Gamma (State Probabilities) ###\n")
+    print("Time Step | State 1    | State 2")
+    print("----------------------------------")
+    for i, g in enumerate(gamma):
+        print(f"{i:9} | {g[0]:11f} | {g[1]:.11f}")
+
+    xi = hmm.xi_comp(alphas, betas, gamma)
+    print("\n### Xi (Transition Probabilities) ###\n")
+    print("Time Step | From 1 → 1 | From 1 → 2 | From 2 → 1 | From 2 → 2")
+    print("--------------------------------------------------------------")
+    for i, x in enumerate(xi):
+        print(f"{i:9} | {x[0,0]:.6f} | {x[0,1]:.6f} | {x[1,0]:.6f} | {x[1,1]:.6f}")
+
+    T_prime, M_prime, new_init_state = hmm.update(alphas, betas, gamma, xi)
+    # Print the updated Transition Matrix
+    print("\n### Updated Transition Matrix (T') ###\n")
+    print("From | To 1         | To 2")
+    print("-----------------------------------")
+    for i, row in enumerate(T_prime):
+        print(f"{i+1:4} | {row[0]:.13f} | {row[1]:.13f}")
+
+    # Print the updated Emission Matrix
+    print("\n### Updated Emission Matrix (M') ###\n")
+    print("State | Emit 0       | Emit 1       | Emit 2")
+    print("---------------------------------------------")
+    for i, row in enumerate(M_prime):
+        print(f"{i+1:5} | {row[0]:.13f} | {row[1]:.13f} | {row[2]:.13f}")
+
+    # Print the updated Initial State Distribution
+    print("\n### Updated Initial State Distribution ###\n")
+    print(f"State 1: {new_init_state[0]:.13f}, State 2: {new_init_state[1]:.13f}")
+
+
+    P_original, P_prime = hmm.trajectory_probability(alphas, betas, T_prime, M_prime, new_init_state)
+    print("\n### Trajectory Probabilities ###\n")
+    print(f"P(Y1, ..., Yt | λ)  = {P_original:.13f}")
+    print(f"P(Y1, ..., Yt | λ') = {P_prime:.13f}")
